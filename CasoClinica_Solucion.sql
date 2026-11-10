@@ -4,8 +4,12 @@ DROP TABLE errores_informe;
 DROP SEQUENCE SEQ_ERROR_INFORME;
 DROP TABLE informe_general;
 
-/* CREACIï¿½N DE TABLAS ====================================================== */
--- Crea la tabla usada para determinar la clasificaciï¿½n del mï¿½dico
+/* ----------------------- CREACIÓN DE OBJEOS --------------------------- */
+
+
+/*========================
+-- Clasificación Médico --
+========================*/
 CREATE TABLE clasificacion_medico
 (
     id_clase NUMBER PRIMARY KEY,
@@ -14,8 +18,9 @@ CREATE TABLE clasificacion_medico
     limite_superior NUMBER NOT NULL
 );
 
-
--- Crea la tabla para almacenar los errores, tanto del sistema como del negocio
+/*===================
+-- Informe Errores --
+===================*/
 CREATE TABLE errores_informe
 (
     id_error NUMBER PRIMARY KEY,
@@ -24,8 +29,9 @@ CREATE TABLE errores_informe
     descripcion_error VARCHAR2(100) NOT NULL
 );
 
-
--- Crea la tabla para almacenar el informe resultante del bloque anï¿½nimo
+/*=======================
+-- Informe Rendimiento --
+=======================*/
 CREATE TABLE informe_general
 (
     rut VARCHAR2(9) NOT NULL,
@@ -41,22 +47,72 @@ CREATE TABLE informe_general
     clasificacion VARCHAR2(10) NOT NULL
 );
 
-
-/* CREACION DE SECUENCIA ================================================== */
--- Crea la secuencia usada como clave primaria en la tabla errores
+/*=====================
+-- Secuencia Errores --
+=====================*/
 CREATE SEQUENCE SEQ_ERROR_INFORME;
 
 
-/* INSERSION DE DATOS */
--- Puebla la tabla con las categorias y sus rangos
-INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 0, 99);
+/* ------------------------- INSERSION DE DATOS ----------------------------- */
+
+/*========================
+-- Clasificacion Medico --
+========================*/
+INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 1, 99);
 INSERT INTO clasificacion_medico VALUES(2, 'Medio', 100, 199);
 INSERT INTO clasificacion_medico VALUES(3, 'Alto', 200, 274);
 
 
-/* DESARROLLO BLOQUE ANï¿½NIMO =============================================== */
+/* -------------------------- DESARROLLO LOGICA ----------------------------- */
+
+/*============================
+-- Package Calculo Puntajes --
+=============================*/
+CREATE OR REPLACE PACKAGE pkg_calc_puntaje
+IS
+    
+    /* Extraer la especialidad y el puntaje asociado a una especialidad dada 
+       Input: NUMBER; Output: VARCHAR, NUMBER */
+    
+    /* Determina el puntaje de experiencia de un medico dado
+       Input: NUMBER; Output: NUMBER */
+    
+    /* Determina el puntaje de productividad a partir de las atenciones
+       Input: NUMBER; Output: NUMBER */
+       
+    /* Determina el puntaje asociado a una region de la consulta 
+       Input: NUMBER; Output: NUMBER */
+END;
+
+/*=============================
+-- Package Insertar Registro --
+=============================*/
+CREATE OR REPLACE PACKAGE pkg_insertar
+IS
+    /* Inserta registros al Informe Rendimiento
+       Input: ; Output: Void */
+
+END;
+
+
+CREATE OR REPLACE PACKAGE pkg_calculos
+IS
+    /* Limpia y guarda los ponderadores dados para esta sesion 
+       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: Void */
+
+    /* Calcula el indicador integral a partir de los puntajes dados 
+       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: NUMBER */
+END;
+
+
+
+
+
+
+
+/* DESARROLLO BLOQUE ANÓNIMO =============================================== */
 DECLARE
-    -- Almacena la informaciï¿½n del mï¿½dico, filtrando por el aï¿½o de la consulta
+    -- Almacena la información del médico, filtrando por el año de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
         SELECT m.rut,
                m.dv,
@@ -92,23 +148,23 @@ DECLARE
     );
     reg_general registro_g;
     
-    -- Almacenan el cï¿½digo y descripciï¿½n del error temporalmente antes del Insert
+    -- Almacenan el código y descripción del error temporalmente antes del Insert
     v_cod_error errores_informe.codigo_error%TYPE;
     v_msg_error errores_informe.descripcion_error%TYPE;
     
-    -- Almacena el aï¿½o a filtrar
+    -- Almacena el año a filtrar
     v_filtro NUMBER;
         
 BEGIN
-    /* INICIALIZACIï¿½N DE VARIBLES */
+    /* INICIALIZACIÓN DE VARIBLES */
     -- Inicializa los valores de los ponderadores en el VARRAY
     v_ponderadores := numArray(0.25, 0.25, 0.25, 0.25);
     
-    -- Inicializa el aï¿½o a filtrar
+    -- Inicializa el año a filtrar
     v_filtro := 2026;
     
     /* BUCLE PRINCIPAL */
-    --Recorre el registro de los mï¿½dicos pasandole a cada uno el aï¿½o a filtrar
+    --Recorre el registro de los médicos pasandole a cada uno el año a filtrar
     FOR reg_medico IN c_medicos(v_filtro) LOOP
         
         -- Obtiene el nombre de la especialidad y su puntaje
@@ -120,8 +176,8 @@ BEGIN
         -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
         BEGIN
             IF reg_medico.cant_atenciones = 0 THEN
-                RAISE_APPLICATION_ERROR(-20001, 'El mï¿½dico no posee atenciones realizadas 
-                                        durante el perï¿½odo de anï¿½lisis.');
+                RAISE_APPLICATION_ERROR(-20001, 'El médico no posee atenciones realizadas 
+                                        durante el período de análisis.');
             END IF;
         -- Captura el error    
         EXCEPTION WHEN OTHERS THEN
@@ -149,13 +205,13 @@ BEGIN
         JOIN consulta co ON (c.id = co.clinica_id)
         WHERE co.medico_rut = reg_medico.rut;
         
-        -- Cï¿½lculo del indicador integral utilizando los valores almacenados en el VARRAY
+        -- Cálculo del indicador integral utilizando los valores almacenados en el VARRAY
         reg_general.rendimiento := (reg_general.ptje_experiencia * v_ponderadores(1)) + 
                                  (reg_general.ptje_productividad * v_ponderadores(2)) + 
                                   (reg_general.ptje_especialidad * v_ponderadores(3)) + 
                                   (reg_general.ptje_region * v_ponderadores(4));
                        
-        -- Obtiene la clasificaciï¿½n segï¿½n el indicador obtenido
+        -- Obtiene la clasificación según el indicador obtenido
         SELECT descripcion_clase INTO reg_general.clasificacion
         FROM clasificacion_medico
         WHERE reg_general.rendimiento BETWEEN limite_inferior AND limite_superior;
