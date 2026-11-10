@@ -1,5 +1,11 @@
---Crea la tabla usada para determinar la clasificación del médico
+/* ELIMINA TABLAS SI EXISTEN */
 DROP TABLE clasificacion_medico;
+DROP TABLE errores_informe;
+DROP SEQUENCE SEQ_ERROR_INFORME;
+DROP TABLE informe_general;
+
+/* CREACIÓN DE TABLAS ==========================================*/
+-- Crea la tabla usada para determinar la clasificación del médico
 CREATE TABLE clasificacion_medico
 (
     id_clase NUMBER PRIMARY KEY,
@@ -7,13 +13,9 @@ CREATE TABLE clasificacion_medico
     limite_inferior NUMBER NOT NULL,
     limite_superior NUMBER NOT NULL
 );
---Puebla la tabla con las categorias y sus rangos
-INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 0, 99);
-INSERT INTO clasificacion_medico VALUES(2, 'Medio', 100, 199);
-INSERT INTO clasificacion_medico VALUES(3, 'Alto', 200, 274);
 
---Crea la tabla usada para almacenar los errores propios del sistema
-DROP TABLE errores_informe;
+
+-- Crea la tabla para almacenar los errores, tanto del sistema como del negocio
 CREATE TABLE errores_informe
 (
     id_error NUMBER PRIMARY KEY,
@@ -21,12 +23,9 @@ CREATE TABLE errores_informe
     codigo_error VARCHAR2(15) NOT NULL,
     descripcion_error VARCHAR2(100) NOT NULL
 );
---Crea la secuencia usada como clave primaria de los errores
-DROP SEQUENCE SEQ_ERROR_INFORME;
-CREATE SEQUENCE SEQ_ERROR_INFORME;
 
---Crea la tabla usada para almacenar el informe resultante 
-DROP TABLE informe_general;
+
+-- Crea la tabla para almacenar el informe resultante del bloque anónimo
 CREATE TABLE informe_general
 (
     rut VARCHAR2(9) NOT NULL,
@@ -42,46 +41,59 @@ CREATE TABLE informe_general
     clasificacion VARCHAR2(10) NOT NULL
 );
 
---Cursor Implicito
+
+/* CREACION DE SECUENCIA */
+-- Crea la secuencia usada como clave primaria en la tabla errores
+CREATE SEQUENCE SEQ_ERROR_INFORME;
+
+
+/* INSERSION DE DATOS */
+-- Puebla la tabla con las categorias y sus rangos
+INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 0, 99);
+INSERT INTO clasificacion_medico VALUES(2, 'Medio', 100, 199);
+INSERT INTO clasificacion_medico VALUES(3, 'Alto', 200, 274);
+
+
+/* DESARROLLO BLOQUE ANÓNIMO */
 DECLARE
-    -- Variable para definir el año a filtrar en el cursor y consultas
-    p_year NUMBER := 2026;
-    
-    --Almacena la información del médico, filtrando por el año de la consulta
+    -- Almacena la información del médico, filtrando por el año de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
-        SELECT  m.rut,
-                m.dv,
-                m.nombre,
-                es.nombre nombre_especialidad,
-                TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12) anios_exp
+        SELECT m.rut,
+               m.dv,
+               m.nombre,
+               es.nombre nombre_especialidad,
+               TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12) anios_exp
         FROM medico m JOIN consulta c ON(m.rut = c.medico_rut)
-            JOIN especialidad es ON (m.especialidad_id = es.id)
-        WHERE EXTRACT(YEAR FROM c.fecha) = p_year AND UPPER(c.estado) = 'REALIZADA';
+                      JOIN especialidad es ON (m.especialidad_id = es.id)
+        WHERE EXTRACT(YEAR FROM c.fecha) = p_year
+                     AND UPPER(c.estado) = 'REALIZADA';
     
-    --Almacena la calificación de los médicos
-    clasificacion_med clasificacion_medico.descripcion_clase%TYPE;
+    -- Almacena la calificación del médico
+    v_clasificacion_med clasificacion_medico.descripcion_clase%TYPE;
     
-    --Almacena el total de atenciones del medico
-    total_atenciones NUMBER;
+    -- Almacena el total de atenciones del medico
+    v_total_atenciones NUMBER;
     
-    --Almacena el puntaje de experiencia del medico
+    -- Almacena el puntaje de experiencia del medico
     v_ptje_experiencia NUMBER;
     
-    --Almacena el puntaje de productividad del medico
+    -- Almacena el puntaje de productividad del medico
     v_ptje_productividad NUMBER;
     
-    --Almacena el puntaje de la especialidad del medico
+    -- Almacena el puntaje de la especialidad del medico
     v_ptje_especialidad NUMBER;
     
-    --Alamcena el puntaje de la region que pertenece el medico
+    -- Alamcena el puntaje de la region que pertenece el medico
     v_ptje_region NUMBER;
     
-    --Alamcena el rendimiento del medico
+    -- Alamcena el rendimiento del medico
     v_rendimiento NUMBER;
     
-    -- Definición del VARRAY para el manejo de los ponderadores
-    TYPE t_ponderadores IS VARRAY(4) OF NUMBER;
-    v_ponderadores t_ponderadores;
+    -- Define un tipo de dato compuesto que almacena numeros
+    TYPE numArray IS VARRAY(4) OF NUMBER;
+    
+    -- Almacena el listado con los ponderadores
+    v_ponderadores numArray;
     
     -- Define el registro para el informe general (RECORD)
     TYPE registro_g IS RECORD (
@@ -99,32 +111,45 @@ DECLARE
     );
     reg_general registro_g;
     
-    -- Variables para el código y descripción del error 
-    codigo_error errores_informe.codigo_error%TYPE;
-    mensaje_error errores_informe.descripcion_error%TYPE;
+    -- Almacenan el código y descripción del error temporalmente antes del Insert
+    v_cod_error errores_informe.codigo_error%TYPE;
+    v_msg_error errores_informe.descripcion_error%TYPE;
+    
+    -- Almacena el año a filtrar
+    v_filtro NUMBER;
         
 BEGIN
-    --Inicializa los valores de los ponderadores en el VARRAY
-    v_ponderadores := t_ponderadores(0.25, 0.25, 0.25, 0.25);
+    /* INICIALIZACIÓN DE VARIBLES */
+    -- Inicializa los valores de los ponderadores en el VARRAY
+    v_ponderadores := numArray(0.25, 0.25, 0.25, 0.25);
+    
+    -- Inicializa el año a filtrar
+    v_filtro := 2026;
+    
+    /* BUCLE PRINCIPAL */
     --Recorre el registro de los médicos pasandole a cada uno el año a filtrar
-    FOR reg_medico IN c_medicos(p_year) LOOP
-        --Obtiene el total de atenciones realizadas por el medico
-        SELECT COUNT(id) INTO total_atenciones
-        FROM consulta
-        WHERE medico_rut = reg_medico.rut AND EXTRACT(YEAR FROM fecha) = p_year --nosegura
-            AND UPPER(estado) = 'REALIZADA';
+    FOR reg_medico IN c_medicos(v_filtro) LOOP
         
-        --Verifica regla de negocio (se lanza la excepcion definida por usuario)
+        -- Obtiene el total de atenciones realizadas por el medico
+        SELECT COUNT(id) INTO v_total_atenciones
+        FROM consulta c
+        WHERE c.medico_rut = reg_medico.rut AND EXTRACT(YEAR FROM fecha) = v_filtro --nosegura
+            AND UPPER(c.estado) = 'REALIZADA';
+        
+        -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
         BEGIN
-            IF total_atenciones = 0 THEN
+            IF v_total_atenciones = 0 THEN
                 RAISE_APPLICATION_ERROR(-20001, 'El médico no posee atenciones realizadas 
                                         durante el período de análisis.');
             END IF;
+        -- Captura el error    
         EXCEPTION WHEN OTHERS THEN
-            codigo_error := SQLCODE;
-            mensaje_error := SQLERRM;
+            -- Recopila el codigo y mensaje de error para pasarlo al insert
+            v_cod_error := SQLCODE;
+            v_msg_error := SQLERRM;
+            
             INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
-            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, codigo_error, mensaje_error);
+            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, v_cod_error, v_msg_error);
         END;
         
         --Obtiene el puntaje de experiencia 
@@ -135,7 +160,7 @@ BEGIN
         --Obtiene el puntaje de productividad del medico mediante el total de atenciones
         SELECT puntaje INTO v_ptje_productividad
         FROM puntajeproductividad
-        WHERE total_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
+        WHERE v_total_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
         
         --Obtiene el puntaje de especialidad
         SELECT es.puntaje INTO v_ptje_especialidad
@@ -151,11 +176,11 @@ BEGIN
         -- Cálculo del indicador integral utilizando los valores almacenados en el VARRAY
         v_rendimiento := (v_ptje_experiencia * v_ponderadores(1)) + 
                        (v_ptje_productividad * v_ponderadores(2)) + 
-                       (v_ptje_especialidad * v_ponderadores(3)) + 
-                       (v_ptje_region * v_ponderadores(4));
+                        (v_ptje_especialidad * v_ponderadores(3)) + 
+                        (v_ptje_region * v_ponderadores(4));
                        
         -- Obtiene la clasificación según el indicador obtenido
-        SELECT descripcion_clase INTO clasificacion_med
+        SELECT descripcion_clase INTO v_clasificacion_med
         FROM clasificacion_medico
         WHERE v_rendimiento BETWEEN limite_inferior AND limite_superior;
 
@@ -188,86 +213,11 @@ BEGIN
                 reg_general.clasificacion
             );
         EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
-            codigo_error := SQLCODE;
-            mensaje_error := SQLERRM;
+            v_cod_error := SQLCODE;
+            v_msg_error := SQLERRM;
             INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
-            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, codigo_error, mensaje_error);
+            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, v_cod_error, v_msg_error);
         END;
     END LOOP;
     COMMIT;
 END;
-
-
-
-SELECT * FROM informe_general;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
