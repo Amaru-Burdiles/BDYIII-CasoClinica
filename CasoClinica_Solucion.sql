@@ -1,0 +1,273 @@
+--Crea la tabla usada para determinar la clasificación del médico
+DROP TABLE clasificacion_medico;
+CREATE TABLE clasificacion_medico
+(
+    id_clase NUMBER PRIMARY KEY,
+    descripcion_clase VARCHAR2(15) NOT NULL,
+    limite_inferior NUMBER NOT NULL,
+    limite_superior NUMBER NOT NULL
+);
+--Puebla la tabla con las categorias y sus rangos
+INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 0, 99);
+INSERT INTO clasificacion_medico VALUES(2, 'Medio', 100, 199);
+INSERT INTO clasificacion_medico VALUES(3, 'Alto', 200, 274);
+
+--Crea la tabla usada para almacenar los errores propios del sistema
+DROP TABLE errores_informe;
+CREATE TABLE errores_informe
+(
+    id_error NUMBER PRIMARY KEY,
+    fecha_error DATE NOT NULL,
+    codigo_error VARCHAR2(15) NOT NULL,
+    descripcion_error VARCHAR2(100) NOT NULL
+);
+--Crea la secuencia usada como clave primaria de los errores
+DROP SEQUENCE SEQ_ERROR_INFORME;
+CREATE SEQUENCE SEQ_ERROR_INFORME;
+
+--Crea la tabla usada para almacenar el informe resultante 
+DROP TABLE informe_general;
+CREATE TABLE informe_general
+(
+    rut VARCHAR2(9) NOT NULL,
+    nombre VARCHAR2(100) NOT NULL,
+    especialidad VARCHAR(50) NOT NULL,
+    anios_exp NUMBER NOT NULL,
+    cant_atenciones NUMBER NOT NULL,
+    ptje_experiencia NUMBER NOT NULL,
+    ptje_productividad NUMBER NOT NULL,
+    ptje_especialidad NUMBER NOT NULL,
+    ptje_region NUMBER NOT NULL,
+    rendimiento NUMBER NOT NULL,
+    clasificacion VARCHAR2(10) NOT NULL
+);
+
+--Cursor Implicito
+DECLARE
+    -- Variable para definir el año a filtrar en el cursor y consultas
+    p_year NUMBER := 2026;
+    
+    --Almacena la información del médico, filtrando por el año de la consulta
+    CURSOR c_medicos(p_year NUMBER) IS 
+        SELECT  m.rut,
+                m.dv,
+                m.nombre,
+                es.nombre nombre_especialidad,
+                TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12) anios_exp
+        FROM medico m JOIN consulta c ON(m.rut = c.medico_rut)
+            JOIN especialidad es ON (m.especialidad_id = es.id)
+        WHERE EXTRACT(YEAR FROM c.fecha) = p_year AND UPPER(c.estado) = 'REALIZADA';
+    
+    --Almacena la calificación de los médicos
+    clasificacion_med clasificacion_medico.descripcion_clase%TYPE;
+    
+    --Almacena el total de atenciones del medico
+    total_atenciones NUMBER;
+    
+    --Almacena el puntaje de experiencia del medico
+    v_ptje_experiencia NUMBER;
+    
+    --Almacena el puntaje de productividad del medico
+    v_ptje_productividad NUMBER;
+    
+    --Almacena el puntaje de la especialidad del medico
+    v_ptje_especialidad NUMBER;
+    
+    --Alamcena el puntaje de la region que pertenece el medico
+    v_ptje_region NUMBER;
+    
+    --Alamcena el rendimiento del medico
+    v_rendimiento NUMBER;
+    
+    -- Definición del VARRAY para el manejo de los ponderadores
+    TYPE t_ponderadores IS VARRAY(4) OF NUMBER;
+    v_ponderadores t_ponderadores;
+    
+    -- Define el registro para el informe general (RECORD)
+    TYPE registro_g IS RECORD (
+        rut                 informe_general.rut%TYPE,
+        nombre              informe_general.nombre%TYPE,
+        especialidad        informe_general.especialidad%TYPE,
+        anios_exp           informe_general.anios_exp%TYPE,
+        cant_atenciones     informe_general.cant_atenciones%TYPE,
+        ptje_experiencia    informe_general.ptje_experiencia%TYPE,
+        ptje_productividad  informe_general.ptje_productividad%TYPE,
+        ptje_especialidad   informe_general.ptje_especialidad%TYPE,
+        ptje_region         informe_general.ptje_region%TYPE,
+        rendimiento         informe_general.rendimiento%TYPE,
+        clasificacion       informe_general.clasificacion%TYPE
+    );
+    reg_general registro_g;
+    
+    -- Variables para el código y descripción del error 
+    codigo_error errores_informe.codigo_error%TYPE;
+    mensaje_error errores_informe.descripcion_error%TYPE;
+        
+BEGIN
+    --Inicializa los valores de los ponderadores en el VARRAY
+    v_ponderadores := t_ponderadores(0.25, 0.25, 0.25, 0.25);
+    --Recorre el registro de los médicos pasandole a cada uno el año a filtrar
+    FOR reg_medico IN c_medicos(p_year) LOOP
+        --Obtiene el total de atenciones realizadas por el medico
+        SELECT COUNT(id) INTO total_atenciones
+        FROM consulta
+        WHERE medico_rut = reg_medico.rut AND EXTRACT(YEAR FROM fecha) = p_year --nosegura
+            AND UPPER(estado) = 'REALIZADA';
+        
+        --Verifica regla de negocio (se lanza la excepcion definida por usuario)
+        BEGIN
+            IF total_atenciones = 0 THEN
+                RAISE_APPLICATION_ERROR(-20001, 'El médico no posee atenciones realizadas 
+                                        durante el período de análisis.');
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            codigo_error := SQLCODE;
+            mensaje_error := SQLERRM;
+            INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
+            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, codigo_error, mensaje_error);
+        END;
+        
+        --Obtiene el puntaje de experiencia 
+        SELECT puntaje INTO v_ptje_experiencia
+        FROM puntajeexperiencia
+        WHERE reg_medico.anios_exp BETWEEN anios_inicio AND anios_fin;
+    
+        --Obtiene el puntaje de productividad del medico mediante el total de atenciones
+        SELECT puntaje INTO v_ptje_productividad
+        FROM puntajeproductividad
+        WHERE total_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
+        
+        --Obtiene el puntaje de especialidad
+        SELECT es.puntaje INTO v_ptje_especialidad
+        FROM especialidad es
+        WHERE es.nombre = reg_medico.nombre_especialidad;
+
+        --Obtiene el puntaje de region 
+        SELECT MAX(r.puntaje) INTO v_ptje_region
+        FROM region r JOIN clinica c ON (r.id = c.region_id)
+        JOIN consulta co ON (c.id = co.clinica_id)
+        WHERE co.medico_rut = reg_medico.rut;
+        
+        -- Cálculo del indicador integral utilizando los valores almacenados en el VARRAY
+        v_rendimiento := (v_ptje_experiencia * v_ponderadores(1)) + 
+                       (v_ptje_productividad * v_ponderadores(2)) + 
+                       (v_ptje_especialidad * v_ponderadores(3)) + 
+                       (v_ptje_region * v_ponderadores(4));
+                       
+        -- Obtiene la clasificación según el indicador obtenido
+        SELECT descripcion_clase INTO clasificacion_med
+        FROM clasificacion_medico
+        WHERE v_rendimiento BETWEEN limite_inferior AND limite_superior;
+
+        -- Setea el registro del informe general utilizando el RECORD
+        reg_general.rut := reg_medico.rut || reg_medico.dv;
+        reg_general.nombre := reg_medico.nombre;
+        reg_general.especialidad := reg_medico.nombre_especialidad; 
+        reg_general.anios_exp := reg_medico.anios_exp;
+        reg_general.cant_atenciones := total_atenciones;
+        reg_general.ptje_experiencia := v_ptje_experiencia;
+        reg_general.ptje_productividad := v_ptje_productividad;
+        reg_general.ptje_especialidad := v_ptje_especialidad;
+        reg_general.ptje_region := v_ptje_region;
+        reg_general.rendimiento := v_rendimiento;
+        reg_general.clasificacion := clasificacion_med;
+
+        -- Inserta registro en la tabla de resultado general controlando duplicados (DUP_VAL_ON_INDEX)[cite: 4, 5]
+        BEGIN
+            INSERT INTO informe_general VALUES (
+                reg_general.rut,
+                reg_general.nombre,
+                reg_general.especialidad,
+                reg_general.anios_exp,
+                reg_general.cant_atenciones,
+                reg_general.ptje_experiencia,
+                reg_general.ptje_productividad,
+                reg_general.ptje_especialidad,
+                reg_general.ptje_region,
+                reg_general.rendimiento,
+                reg_general.clasificacion
+            );
+        EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
+            codigo_error := SQLCODE;
+            mensaje_error := SQLERRM;
+            INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
+            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, codigo_error, mensaje_error);
+        END;
+    END LOOP;
+    COMMIT;
+END;
+
+
+
+SELECT * FROM informe_general;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
