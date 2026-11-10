@@ -4,11 +4,11 @@ DROP TABLE errores_informe;
 DROP SEQUENCE SEQ_ERROR_INFORME;
 DROP TABLE informe_general;
 
-/* ----------------------- CREACIÓN DE OBJEOS --------------------------- */
+/* ----------------------- CREACIï¿½N DE OBJEOS --------------------------- */
 
 
 /*========================
--- Clasificación Médico --
+-- Clasificacion Medico --
 ========================*/
 CREATE TABLE clasificacion_medico
 (
@@ -73,15 +73,72 @@ IS
     
     /* Extraer la especialidad y el puntaje asociado a una especialidad dada 
        Input: NUMBER; Output: VARCHAR, NUMBER */
+    PROCEDURE prc_especialidad(p_id NUMBER, especialidad OUT NUMBER, puntaje OUT VARCHAR);
     
     /* Determina el puntaje de experiencia de un medico dado
        Input: NUMBER; Output: NUMBER */
+    FUNCTION fn_experiencia(p_experiencia NUMBER)
+    RETURN NUMBER;
     
     /* Determina el puntaje de productividad a partir de las atenciones
        Input: NUMBER; Output: NUMBER */
-       
+    FUNCTION fn_productividad(p_atenciones NUMBER)
+    RETURN NUMBER;
+    
     /* Determina el puntaje asociado a una region de la consulta 
        Input: NUMBER; Output: NUMBER */
+    FUNCTION fn_region(p_run_medico NUMBER)
+    RETURN NUMBER;
+    
+END;
+
+/* IMPLEMENTACION */
+CREATE OR REPLACE PACKAGE BODY pkg_calc_puntaje
+IS
+    -- PROCEDIMIENTO PUBLICO
+    PROCEDURE prc_especialidad(p_id NUMBER, especialidad OUT NUMBER, puntaje OUT VARCHAR)
+    IS
+    BEGIN
+        -- Obtiene el nombre de la especialidad y su puntaje
+        SELECT es.nombre, es.puntaje
+        INTO especialidad, puntaje
+        FROM especialidad es
+        WHERE p_id = es.id;
+    END;
+    
+    -- FUNCION PUBLICA
+    FUNCTION fn_experiencia(p_experiencia NUMBER)
+    RETURN NUMBER
+    IS
+        -- Almacena el puntaje de experiencia del medico
+        v_ptje_experiencia NUMBER;
+        
+    BEGIN
+        --Obtiene el puntaje de experiencia 
+        SELECT puntaje
+        INTO v_ptje_experiencia
+        FROM puntajeexperiencia
+        WHERE p_experiencia BETWEEN anios_inicio AND anios_fin;
+        
+        -- Retorna el valor calculado
+        RETURN v_ptje_experiencia;
+    END;
+    
+    -- FUNCION PUBLICA
+    FUNCTION fn_productividad(p_atenciones NUMBER)
+    RETURN NUMBER
+    IS
+        -- Almacena el puntaje de productividad del medico
+        v_ptje_productividad NUMBER;
+        
+    BEGIN
+        --Obtiene el puntaje de productividad del medico mediante el total de atenciones
+        SELECT puntaje
+        INTO v_ptje_productividad
+        FROM puntajeproductividad
+        WHERE p_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
+    END;
+    
 END;
 
 /*=============================
@@ -110,9 +167,9 @@ END;
 
 
 
-/* DESARROLLO BLOQUE ANÓNIMO =============================================== */
+/* DESARROLLO BLOQUE ANï¿½NIMO =============================================== */
 DECLARE
-    -- Almacena la información del médico, filtrando por el año de la consulta
+    -- Almacena la informaciï¿½n del mï¿½dico, filtrando por el aï¿½o de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
         SELECT m.rut,
                m.dv,
@@ -148,36 +205,32 @@ DECLARE
     );
     reg_general registro_g;
     
-    -- Almacenan el código y descripción del error temporalmente antes del Insert
+    -- Almacenan el cï¿½digo y descripciï¿½n del error temporalmente antes del Insert
     v_cod_error errores_informe.codigo_error%TYPE;
     v_msg_error errores_informe.descripcion_error%TYPE;
     
-    -- Almacena el año a filtrar
+    -- Almacena el aï¿½o a filtrar
     v_filtro NUMBER;
         
 BEGIN
-    /* INICIALIZACIÓN DE VARIBLES */
+    /* INICIALIZACIï¿½N DE VARIBLES */
     -- Inicializa los valores de los ponderadores en el VARRAY
     v_ponderadores := numArray(0.25, 0.25, 0.25, 0.25);
     
-    -- Inicializa el año a filtrar
+    -- Inicializa el aï¿½o a filtrar
     v_filtro := 2026;
     
     /* BUCLE PRINCIPAL */
-    --Recorre el registro de los médicos pasandole a cada uno el año a filtrar
+    --Recorre el registro de los mï¿½dicos pasandole a cada uno el aï¿½o a filtrar
     FOR reg_medico IN c_medicos(v_filtro) LOOP
         
-        -- Obtiene el nombre de la especialidad y su puntaje
-        SELECT es.nombre, es.puntaje
-        INTO reg_general.nomb_especialidad, reg_general.ptje_especialidad
-        FROM especialidad es
-        WHERE reg_medico.especialidad_id = es.id;
+        -- procedimiento especialidad
         
         -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
         BEGIN
             IF reg_medico.cant_atenciones = 0 THEN
-                RAISE_APPLICATION_ERROR(-20001, 'El médico no posee atenciones realizadas 
-                                        durante el período de análisis.');
+                RAISE_APPLICATION_ERROR(-20001, 'El mï¿½dico no posee atenciones realizadas 
+                                        durante el perï¿½odo de anï¿½lisis.');
             END IF;
         -- Captura el error    
         EXCEPTION WHEN OTHERS THEN
@@ -189,15 +242,9 @@ BEGIN
             VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, v_cod_error, v_msg_error);
         END;
         
-        --Obtiene el puntaje de experiencia 
-        SELECT puntaje INTO reg_general.ptje_experiencia
-        FROM puntajeexperiencia
-        WHERE reg_medico.anios_exp BETWEEN anios_inicio AND anios_fin;
+        -- funcion especialidad
     
-        --Obtiene el puntaje de productividad del medico mediante el total de atenciones
-        SELECT puntaje INTO reg_general.ptje_productividad
-        FROM puntajeproductividad
-        WHERE reg_medico.cant_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
+        -- funcion productividad
 
         --Obtiene el puntaje de region 
         SELECT MAX(r.puntaje) INTO reg_general.ptje_region
@@ -205,13 +252,13 @@ BEGIN
         JOIN consulta co ON (c.id = co.clinica_id)
         WHERE co.medico_rut = reg_medico.rut;
         
-        -- Cálculo del indicador integral utilizando los valores almacenados en el VARRAY
+        -- Cï¿½lculo del indicador integral utilizando los valores almacenados en el VARRAY
         reg_general.rendimiento := (reg_general.ptje_experiencia * v_ponderadores(1)) + 
                                  (reg_general.ptje_productividad * v_ponderadores(2)) + 
                                   (reg_general.ptje_especialidad * v_ponderadores(3)) + 
                                   (reg_general.ptje_region * v_ponderadores(4));
                        
-        -- Obtiene la clasificación según el indicador obtenido
+        -- Obtiene la clasificaciï¿½n segï¿½n el indicador obtenido
         SELECT descripcion_clase INTO reg_general.clasificacion
         FROM clasificacion_medico
         WHERE reg_general.rendimiento BETWEEN limite_inferior AND limite_superior;
