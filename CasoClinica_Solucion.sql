@@ -189,13 +189,13 @@ BEGIN
         reg_general.nombre := reg_medico.nombre;
         reg_general.especialidad := reg_medico.nombre_especialidad; 
         reg_general.anios_exp := reg_medico.anios_exp;
-        reg_general.cant_atenciones := total_atenciones;
+        reg_general.cant_atenciones := v_total_atenciones;
         reg_general.ptje_experiencia := v_ptje_experiencia;
         reg_general.ptje_productividad := v_ptje_productividad;
         reg_general.ptje_especialidad := v_ptje_especialidad;
         reg_general.ptje_region := v_ptje_region;
         reg_general.rendimiento := v_rendimiento;
-        reg_general.clasificacion := clasificacion_med;
+        reg_general.clasificacion := v_clasificacion_med;
 
         -- Inserta registro en la tabla de resultado general controlando duplicados (DUP_VAL_ON_INDEX)[cite: 4, 5]
         BEGIN
