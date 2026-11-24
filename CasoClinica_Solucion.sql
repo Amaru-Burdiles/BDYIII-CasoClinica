@@ -47,6 +47,17 @@ CREATE TABLE informe_rendimiento
     clasificacion VARCHAR2(10) NOT NULL
 );
 
+/*========================
+-- Bitacora Cancelacion --
+========================*/
+CREATE TABLE bitacora_cancelacion
+(
+    id_consulta NUMBER NOT NULL PRIMARY KEY,
+    fecha_cambio DATE NOT NULL,
+    encargado VARCHAR2(100) NOT NULL,
+    motivo VARCHAR2(600) NOT NULL
+);
+
 /*=====================
 -- Secuencia Errores --
 =====================*/
@@ -337,6 +348,21 @@ END;
 
 
 
+/*======================
+-- Trigger Auditorias --
+======================*/
+CREATE OR REPLACE TRIGGER trg_consulta_cancelada
+AFTER UPDATE
+ON consulta
+FOR EACH ROW
+DECLARE
+BEGIN
+    IF :NEW.estado = 'Cancelada' THEN
+        
+END;
+
+
+
 /*===========================
 -- Procedimiento Principal --
 ===========================*/
@@ -348,7 +374,7 @@ CREATE OR REPLACE PROCEDURE prc_generar_informe(
     p_pond_reg NUMBER
 )
 IS
-    -- Almacena la informacion del medico, filtrando por el año de la consulta
+    -- Almacena la informacion del medico, filtrando por el aï¿½o de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
         SELECT m.rut,
                m.dv,
@@ -381,7 +407,7 @@ IS
      
 BEGIN
     /* BUCLE PRINCIPAL */
-    --Recorre el registro de los medicos pasando a cada uno el año a filtrar
+    --Recorre el registro de los medicos pasando a cada uno el aï¿½o a filtrar
     FOR reg_medico IN c_medicos(p_year) LOOP
         
         -- Delega una funcion para calcular el puntaje experiencia
@@ -442,7 +468,7 @@ DECLARE
     -- Almacena el listado con los ponderadores
     v_ponderadores numArray;
     
-    -- Almacena el año a filtrar
+    -- Almacena el aï¿½o a filtrar
     v_filtro NUMBER;
         
 BEGIN
@@ -451,7 +477,7 @@ BEGIN
     --           experiencia, productividad, especialidad, region
     v_ponderadores := numArray(0.25, 0.25, 0.25, 0.25);
     
-    -- Ingrece el año a filtrar
+    -- Ingrece el aï¿½o a filtrar
     v_filtro := 2026;
     
     -- Llama al procedimiento principal
@@ -466,7 +492,10 @@ BEGIN
     COMMIT;
 END;
 
--- Testing
+
+/*===========
+-- Testing --
+===========*/
 SELECT *
 FROM medico m LEFT JOIN especialidad e ON (m.especialidad_id = e.id);
 
