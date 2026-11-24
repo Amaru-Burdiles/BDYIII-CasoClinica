@@ -1,10 +1,10 @@
-/* ELIMINA TABLAS SI EXISTEN */
+/* LIMPIEZA DE TABLAS */
 DROP TABLE clasificacion_medico;
-DROP TABLE errores_informe;
+DROP TABLE informe_errores;
 DROP SEQUENCE SEQ_ERROR_INFORME;
 DROP TABLE informe_general;
 
-/* ----------------------- CREACIï¿½N DE OBJEOS --------------------------- */
+/* ----------------------- CREACION DE OBJEOS --------------------------- */
 
 
 /*========================
@@ -21,7 +21,7 @@ CREATE TABLE clasificacion_medico
 /*===================
 -- Informe Errores --
 ===================*/
-CREATE TABLE errores_informe
+CREATE TABLE informe_errores
 (
     id_error NUMBER PRIMARY KEY,
     fecha_error DATE NOT NULL,
@@ -58,7 +58,7 @@ CREATE SEQUENCE SEQ_ERROR_INFORME;
 /*========================
 -- Clasificacion Medico --
 ========================*/
-INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 1, 99);
+INSERT INTO clasificacion_medico VALUES(1, 'Bajo', 0, 99);
 INSERT INTO clasificacion_medico VALUES(2, 'Medio', 100, 199);
 INSERT INTO clasificacion_medico VALUES(3, 'Alto', 200, 274);
 
@@ -73,7 +73,7 @@ IS
     
     /* Extraer la especialidad y el puntaje asociado a una especialidad dada 
        Input: NUMBER; Output: VARCHAR, NUMBER */
-    PROCEDURE prc_especialidad(p_id NUMBER, especialidad OUT NUMBER, puntaje OUT VARCHAR);
+    PROCEDURE prc_especialidad(p_id NUMBER, nombre OUT VARCHAR, puntaje OUT NUMBER);
     
     /* Determina el puntaje de experiencia de un medico dado
        Input: NUMBER; Output: NUMBER */
@@ -93,10 +93,12 @@ IS
     /* Calcula el rendimiento en base a especialidad, productividad, exp, region
        y sus respectivas ponderaciones. Si estas ultimas son 0 se usa un defecto
        Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: NUMBER */
-    FUNCTION fn_rendimiento(p_especialidad NUMBER, p_ponderacion_es NUMBER,
-                            p_productividad NUMBER, p_ponderacion_pr NUMBER,
-                            p_experiencia NUMBER, p_ponderacion_ex NUMBER,
-                            p_region NUMBER, p_ponderacion_re NUMBER)
+    FUNCTION fn_rendimiento(
+        p_experiencia NUMBER, p_ponderacion_ex NUMBER,
+        p_productividad NUMBER, p_ponderacion_pr NUMBER,
+        p_especialidad NUMBER, p_ponderacion_es NUMBER,
+        p_region NUMBER, p_ponderacion_re NUMBER
+    )
     RETURN NUMBER;
     
 END;
@@ -105,12 +107,12 @@ END;
 CREATE OR REPLACE PACKAGE BODY pkg_calc_puntaje
 IS
     -- PROCEDIMIENTO PUBLICO
-    PROCEDURE prc_especialidad(p_id NUMBER, especialidad OUT NUMBER, puntaje OUT VARCHAR)
+    PROCEDURE prc_especialidad(p_id NUMBER, nombre OUT VARCHAR, puntaje OUT NUMBER)
     IS
     BEGIN
         -- Obtiene el nombre de la especialidad y su puntaje
         SELECT es.nombre, es.puntaje
-        INTO especialidad, puntaje
+        INTO nombre, puntaje
         FROM especialidad es
         WHERE p_id = es.id;
     END;
@@ -171,10 +173,12 @@ IS
     END;
     
     -- FUNCION PUBLICA
-    FUNCTION fn_rendimiento(p_experiencia NUMBER, p_ponderacion_ex NUMBER,
-                            p_productividad NUMBER, p_ponderacion_pr NUMBER,
-                            p_especialidad NUMBER, p_ponderacion_es NUMBER,
-                            p_region NUMBER, p_ponderacion_re NUMBER)
+    FUNCTION fn_rendimiento(
+        p_experiencia NUMBER, p_ponderacion_ex NUMBER,
+        p_productividad NUMBER, p_ponderacion_pr NUMBER,
+        p_especialidad NUMBER, p_ponderacion_es NUMBER,
+        p_region NUMBER, p_ponderacion_re NUMBER
+    )
     RETURN NUMBER
     IS
         -- Almacena el puntaje de rendimeinto
@@ -192,11 +196,17 @@ IS
     END;
 END;
 
+
+
 /*=============================
 -- Package Insertar Registro --
 =============================*/
 CREATE OR REPLACE PACKAGE pkg_insertar
 IS
+    /* Inserta registros al Informe errores
+       Input: NUMBER, VARCHAR; Output: Void */
+    PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR);
+
     /* Inserta registros al Informe Rendimiento
        Input: ; Output: Void */
     PROCEDURE prc_informe_rendimiento(
@@ -218,12 +228,12 @@ END;
 /* IMPLEMENTACION */
 CREATE OR REPLACE PACKAGE BODY pkg_insertar
 IS
-    -- PROCEDIMIENTO PRIVADO
+    -- PROCEDIMIENTO PUBLICO
     PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR)
     IS
     BEGIN
         -- Inserta el error en la tabla informe errores
-        INSERT INTO errores_informe
+        INSERT INTO informe_errores
             VALUES (seq_error_informe.NEXTVAL, SYSDATE, v_codigo, v_mensaje);
         
     END;
@@ -243,9 +253,13 @@ IS
         p_clasificacion VARCHAR
     )
     IS
+        -- Almacena el codigo y mensaje del error
+        v_cod_error NUMBER;
+        v_msg_error informe_errores.descripcion_error%TYPE;
+        
     BEGIN
         -- Inserta un ragistro en la tabla informe rendimiento
-        INSERT INTO informe_rendimieto VALUES (
+        INSERT INTO informe_rendimiento VALUES (
                 p_rut,
                 p_nombre,
                 p_especialidad,
@@ -265,10 +279,12 @@ IS
                 v_msg_error := SQLERRM;
                 
                 -- Guarda el error
-                pprc_informe_errores(v_cod_error, v_msg_error);
+                prc_informe_errores(v_cod_error, v_msg_error);
     END;
     
 END;
+
+
 
 /*======================
 -- Funcion Almacenada --
@@ -291,6 +307,7 @@ BEGIN
 END;
 
 
+
 /*=========================
 -- Trigger Regla Negocio --
 =========================*/
@@ -298,11 +315,40 @@ CREATE OR REPLACE TRIGGER trg_sin_consultas
 AFTER INSERT
 ON informe_rendimiento
 FOR EACH ROW
-
-
-/* DESARROLLO BLOQUE ANï¿½NIMO =============================================== */
 DECLARE
-    -- Almacena la informaciï¿½n del mï¿½dico, filtrando por el aï¿½o de la consulta
+    -- Almacenan el codigo y mensaje del error
+    v_cod_error NUMBER;
+    v_msg_error informe_errores.descripcion_error%TYPE;
+    
+BEGIN
+    IF :NEW.cant_atenciones = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'El medico no posee atenciones realizadas durante el periodo de analisis.');
+    END IF;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Captura los datos del error
+        v_cod_error := SQLCODE();
+        v_msg_error := SQLERRM();
+        
+        -- Deja registro del error
+        pkg_insertar.prc_informe_errores(v_cod_error, v_msg_error);
+END;
+
+
+
+/*===========================
+-- Procedimiento Principal --
+===========================*/
+CREATE OR REPLACE PROCEDURE prc_generar_informe(
+    p_year NUMBER,
+    p_pond_exp NUMBER,
+    p_pond_pro NUMBER,
+    p_pond_esp NUMBER,
+    p_pond_reg NUMBER
+)
+IS
+    -- Almacena la informacion del medico, filtrando por el año de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
         SELECT m.rut,
                m.dv,
@@ -319,73 +365,129 @@ DECLARE
                  m.especialidad_id,
                  TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12);
     
+    -- Define una estructura para agrupar los resultados de cursores implicitos
+    TYPE camposInforme IS RECORD (
+        nomb_especialidad   especialidad.nombre%TYPE,
+        ptje_experiencia    informe_rendimiento.ptje_experiencia%TYPE,
+        ptje_productividad  informe_rendimiento.ptje_productividad%TYPE,
+        ptje_especialidad   informe_rendimiento.ptje_especialidad%TYPE,
+        ptje_region         informe_rendimiento.ptje_region%TYPE,
+        rendimiento         informe_rendimiento.rendimiento%TYPE,
+        clasificacion       informe_rendimiento.clasificacion%TYPE
+    );
+    
+    -- Almacena todos los datos necesarios para el informe
+    reg_informe camposInforme;
+     
+BEGIN
+    /* BUCLE PRINCIPAL */
+    --Recorre el registro de los medicos pasando a cada uno el año a filtrar
+    FOR reg_medico IN c_medicos(p_year) LOOP
+        
+        -- Delega una funcion para calcular el puntaje experiencia
+        reg_informe.ptje_experiencia := pkg_calc_puntaje.fn_experiencia(reg_medico.anios_exp);
+        
+        -- Delega un procedimiento para obtener la especialidad y su puntaje
+        pkg_calc_puntaje.prc_especialidad(
+            reg_medico.especialidad_id,
+            reg_informe.nomb_especialidad,
+            reg_informe.ptje_especialidad
+        );
+        
+        -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
+    
+        -- Delega una funcion para calcular el puntaje de productividad
+        reg_informe.ptje_productividad := pkg_calc_puntaje.fn_productividad(reg_medico.cant_atenciones);
+
+        -- Delega una funcion para calcular el puntaje region
+        reg_informe.ptje_region := pkg_calc_puntaje.fn_region(reg_medico.rut);
+        
+        -- Delegamos una funcion para calcular el rendimiento
+        reg_informe.rendimiento := pkg_calc_puntaje.fn_rendimiento(
+            reg_informe.ptje_experiencia, p_pond_exp,
+            reg_informe.ptje_productividad, p_pond_pro,
+            reg_informe.ptje_especialidad, p_pond_esp,
+            reg_informe.ptje_region, p_pond_reg
+        );
+                       
+        -- Delega una funcion para clasificar al medico
+        reg_informe.clasificacion := fn_clasificar_medico(reg_informe.rendimiento);
+
+        -- Delega un procedimiento para guardar el informe controlando duplicados
+        pkg_insertar.prc_informe_rendimiento(
+            reg_medico.rut,
+            reg_medico.nombre,
+            reg_informe.nomb_especialidad,
+            reg_medico.anios_exp,
+            reg_medico.cant_atenciones,
+            reg_informe.ptje_experiencia,
+            reg_informe.ptje_productividad,
+            reg_informe.ptje_especialidad,
+            reg_informe.ptje_region,
+            reg_informe.rendimiento,
+            reg_informe.clasificacion
+        );
+    END LOOP;
+END;
+
+
+
+/*==================
+-- Bloque Anonimo --
+==================*/
+DECLARE
     -- Define un tipo de dato compuesto que almacena numeros
     TYPE numArray IS VARRAY(4) OF NUMBER;
     
     -- Almacena el listado con los ponderadores
     v_ponderadores numArray;
-
     
-    -- Define una estructura para agrupar los resultados de cursores implicitos
-    TYPE registro_g IS RECORD (
-        nomb_especialidad   especialidad.nombre%TYPE,
-        ptje_experiencia    informe_general.ptje_experiencia%TYPE,
-        ptje_productividad  informe_general.ptje_productividad%TYPE,
-        ptje_especialidad   informe_general.ptje_especialidad%TYPE,
-        ptje_region         informe_general.ptje_region%TYPE,
-        rendimiento         informe_general.rendimiento%TYPE,
-        clasificacion       informe_general.clasificacion%TYPE
-    );
-    reg_general registro_g;
-    
-    -- Almacenan el cï¿½digo y descripciï¿½n del error temporalmente antes del Insert
-    v_cod_error errores_informe.codigo_error%TYPE;
-    v_msg_error errores_informe.descripcion_error%TYPE;
-    
-    -- Almacena el aï¿½o a filtrar
+    -- Almacena el año a filtrar
     v_filtro NUMBER;
         
 BEGIN
-    /* INICIALIZACIï¿½N DE VARIBLES */
-    -- Inicializa los valores de los ponderadores en el VARRAY
+    /* INICIALIZACION DE VARIBLES */
+    -- Ingrece los ponderadores para cada puntaje en el siguiente orden:
+    --           experiencia, productividad, especialidad, region
     v_ponderadores := numArray(0.25, 0.25, 0.25, 0.25);
     
-    -- Inicializa el aï¿½o a filtrar
+    -- Ingrece el año a filtrar
     v_filtro := 2026;
     
-    /* BUCLE PRINCIPAL */
-    --Recorre el registro de los mï¿½dicos pasandole a cada uno el aï¿½o a filtrar
-    FOR reg_medico IN c_medicos(v_filtro) LOOP
-        
-        -- procedimiento especialidad
-        
-        -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
-        BEGIN
-            IF reg_medico.cant_atenciones = 0 THEN
-                RAISE_APPLICATION_ERROR(-20001, 'El mï¿½dico no posee atenciones realizadas 
-                                        durante el perï¿½odo de anï¿½lisis.');
-            END IF;
-        -- Captura el error    
-        EXCEPTION WHEN OTHERS THEN
-            -- Recopila el codigo y mensaje de error para pasarlo al insert
-            v_cod_error := SQLCODE;
-            v_msg_error := SQLERRM;
-            
-            INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
-            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, v_cod_error, v_msg_error);
-        END;
-        
-        -- funcion especialidad
+    -- Llama al procedimiento principal
+    prc_generar_informe(
+        v_filtro,
+        v_ponderadores(1),
+        v_ponderadores(2),
+        v_ponderadores(3),
+        v_ponderadores(4)
+    );
     
-        -- funcion productividad
-
-        -- funcion region
-        
-        -- funcion rendimiento
-                       
-        -- funcion clasificacion
-
-        -- Inserta registro en la tabla de resultado general controlando duplicados
-    END LOOP;
     COMMIT;
+END;
+
+-- Testing
+SELECT *
+FROM medico m LEFT JOIN especialidad e ON (m.especialidad_id = e.id);
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+    CURSOR c_medicos IS
+        SELECT
+        m.rut,
+        m.especialidad_id
+        FROM medico m;
+    
+    v_resultado especialidad.nombre%TYPE;
+    v_puntaje NUMBER;
+    
+BEGIN
+
+    FOR reg_m IN c_medicos LOOP
+        pkg_calc_puntaje.prc_especialidad(reg_m.especialidad_id, v_resultado, v_puntaje);
+        
+        DBMS_OUTPUT.PUT_LINE(reg_m.rut || ' ' || v_resultado || ' ' || v_puntaje);
+    
+    END LOOP;    
 END;
