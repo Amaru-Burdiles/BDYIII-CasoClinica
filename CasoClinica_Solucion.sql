@@ -1,10 +1,12 @@
 /* LIMPIEZA DE TABLAS */
 DROP TABLE clasificacion_medico;
 DROP TABLE informe_errores;
-DROP SEQUENCE SEQ_ERROR_INFORME;
-DROP TABLE informe_general;
+DROP TABLE informe_rendimiento;
+DROP TABLE bitacora_cancelacion;
+DROP SEQUENCE seq_informe_errores;
 
-/* ----------------------- CREACION DE OBJEOS --------------------------- */
+
+/* ------------------------- CREACION DE OBJEOS ----------------------------- */
 
 
 /*========================
@@ -18,6 +20,8 @@ CREATE TABLE clasificacion_medico
     limite_superior NUMBER NOT NULL
 );
 
+
+
 /*===================
 -- Informe Errores --
 ===================*/
@@ -29,34 +33,67 @@ CREATE TABLE informe_errores
     descripcion_error VARCHAR2(100) NOT NULL
 );
 
+
+
 /*=======================
 -- Informe Rendimiento --
 =======================*/
 CREATE TABLE informe_rendimiento
 (
+    -- Info del medico
     rut VARCHAR2(9) NOT NULL,
     nombre VARCHAR2(100) NOT NULL,
     especialidad VARCHAR(50) NOT NULL,
     anios_exp NUMBER NOT NULL,
     cant_atenciones NUMBER NOT NULL,
+    
+    -- Puntajes y clasificacion
     ptje_experiencia NUMBER NOT NULL,
     ptje_productividad NUMBER NOT NULL,
     ptje_especialidad NUMBER NOT NULL,
     ptje_region NUMBER NOT NULL,
     rendimiento NUMBER NOT NULL,
-    clasificacion VARCHAR2(10) NOT NULL
+    clasificacion VARCHAR2(10) NOT NULL,
+    
+    -- Especificaciones del informe
+    periodo_filtrado NUMBER NOT NULL,
+    fecha_informe DATE NOT NULL
 );
+
+ALTER TABLE informe_rendimiento
+ADD CONSTRAINT PK_informe_rendimiento PRIMARY KEY (
+    rut,
+    nombre,
+    especialidad,
+    anios_exp,
+    cant_atenciones,
+    ptje_experiencia,
+    ptje_productividad,
+    ptje_especialidad,
+    ptje_region,
+    rendimiento,
+    clasificacion,
+    periodo_filtrado,
+    fecha_informe
+);
+
+
 
 /*========================
 -- Bitacora Cancelacion --
 ========================*/
 CREATE TABLE bitacora_cancelacion
 (
-    id_consulta NUMBER NOT NULL PRIMARY KEY,
+    id_consulta NUMBER NOT NULL,
     fecha_cambio DATE NOT NULL,
     encargado VARCHAR2(100) NOT NULL,
     motivo VARCHAR2(600) NOT NULL
 );
+
+ALTER TABLE bitacora_cancelacion
+ADD CONSTRAINT PK_bitacora PRIMARY KEY (id_consulta, fecha_cambio);
+
+
 
 /*=====================
 -- Secuencia Errores --
@@ -101,23 +138,12 @@ IS
     FUNCTION fn_region(p_run_medico NUMBER)
     RETURN NUMBER;
     
-    /* Calcula el rendimiento en base a especialidad, productividad, exp, region
-       y sus respectivas ponderaciones. Si estas ultimas son 0 se usa un defecto
-       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: NUMBER */
-    FUNCTION fn_rendimiento(
-        p_experiencia NUMBER, p_ponderacion_ex NUMBER,
-        p_productividad NUMBER, p_ponderacion_pr NUMBER,
-        p_especialidad NUMBER, p_ponderacion_es NUMBER,
-        p_region NUMBER, p_ponderacion_re NUMBER
-    )
-    RETURN NUMBER;
-    
 END;
 
 /* IMPLEMENTACION */
 CREATE OR REPLACE PACKAGE BODY pkg_calc_puntaje
 IS
-    -- PROCEDIMIENTO PUBLICO
+    -- ESPECIALIDAD
     PROCEDURE prc_especialidad(p_id NUMBER, nombre OUT VARCHAR, puntaje OUT NUMBER)
     IS
     BEGIN
@@ -128,7 +154,7 @@ IS
         WHERE p_id = es.id;
     END;
     
-    -- FUNCION PUBLICA
+    -- EXPERIENCIA
     FUNCTION fn_experiencia(p_experiencia NUMBER)
     RETURN NUMBER
     IS
@@ -146,7 +172,7 @@ IS
         RETURN v_ptje_experiencia;
     END;
     
-    -- FUNCION PUBLICA
+    -- PRODUCTIVIDAD
     FUNCTION fn_productividad(p_atenciones NUMBER)
     RETURN NUMBER
     IS
@@ -164,7 +190,7 @@ IS
         RETURN v_ptje_productividad;
     END;
     
-    -- FUNCION PUBLICA
+    -- REGION
     FUNCTION fn_region(p_run_medico NUMBER)
     RETURN NUMBER
     IS
@@ -183,28 +209,6 @@ IS
         RETURN v_ptje_region;
     END;
     
-    -- FUNCION PUBLICA
-    FUNCTION fn_rendimiento(
-        p_experiencia NUMBER, p_ponderacion_ex NUMBER,
-        p_productividad NUMBER, p_ponderacion_pr NUMBER,
-        p_especialidad NUMBER, p_ponderacion_es NUMBER,
-        p_region NUMBER, p_ponderacion_re NUMBER
-    )
-    RETURN NUMBER
-    IS
-        -- Almacena el puntaje de rendimeinto
-        v_ptje_rendimiento NUMBER;
-        
-    BEGIN
-        -- Calcula el rendimiento utilizando los valores dados
-        v_ptje_rendimiento := (p_experiencia * p_ponderacion_ex) 
-                            + (p_productividad * p_ponderacion_pr)
-                            + (p_especialidad * p_ponderacion_es) 
-                            + (p_region * p_ponderacion_re);
-        
-        -- Retorna el valor calculado
-        RETURN v_ptje_rendimiento;
-    END;
 END;
 
 
@@ -214,10 +218,6 @@ END;
 =============================*/
 CREATE OR REPLACE PACKAGE pkg_insertar
 IS
-    /* Inserta registros al Informe errores
-       Input: NUMBER, VARCHAR; Output: Void */
-    PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR);
-
     /* Inserta registros al Informe Rendimiento
        Input: ; Output: Void */
     PROCEDURE prc_informe_rendimiento(
@@ -231,15 +231,28 @@ IS
         p_ptje_especialidad NUMBER,
         p_ptje_region NUMBER,
         p_rendimiento NUMBER,
-        p_clasificacion VARCHAR
+        p_clasificacion VARCHAR,
+        p_periodo NUMBER
     );
+    
+    
+    
+    /* Inserta registros a la bitacora de consultas canceladas 
+       Input: NUMBER; Output: Void */
+    PROCEDURE prc_consulta_cancelada(p_id_consulta NUMBER);
+    
+
+
+    /* Inserta registros al Informe errores
+       Input: NUMBER, VARCHAR; Output: Void */
+    PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR);
 
 END;
 
 /* IMPLEMENTACION */
 CREATE OR REPLACE PACKAGE BODY pkg_insertar
-IS
-    -- PROCEDIMIENTO PUBLICO
+IS 
+    -- INFORME ERRORES
     PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR)
     IS
     BEGIN
@@ -249,7 +262,8 @@ IS
         
     END;
     
-    -- PROCEDIMIENTO PUBLICO
+
+    -- INFORME RENDIMIENTO
     PROCEDURE prc_informe_rendimiento(
         p_rut VARCHAR,
         p_nombre VARCHAR,
@@ -261,7 +275,8 @@ IS
         p_ptje_especialidad NUMBER,
         p_ptje_region NUMBER,
         p_rendimiento NUMBER,
-        p_clasificacion VARCHAR
+        p_clasificacion VARCHAR,
+        p_periodo NUMBER
     )
     IS
         -- Almacena el codigo y mensaje del error
@@ -281,7 +296,9 @@ IS
                 p_ptje_especialidad,
                 p_ptje_region,
                 p_rendimiento,
-                p_clasificacion
+                p_clasificacion,
+                p_periodo,
+                SYSDATE
             );
         EXCEPTION -- Try-Catch: En caso que los datos esten duplicados
             WHEN DUP_VAL_ON_INDEX THEN
@@ -293,6 +310,62 @@ IS
                 prc_informe_errores(v_cod_error, v_msg_error);
     END;
     
+    
+    -- CONSULTA CANCELADA
+    PROCEDURE prc_consulta_cancelada(p_id_consulta NUMBER)
+    IS
+        -- Almacena el motivo de la cancelacion
+        v_motivo bitacora_cancelacion.motivo%TYPE;
+        
+        -- Almacena el codigo y mensaje del error
+        v_cod_error NUMBER;
+        v_msg_error informe_errores.descripcion_error%TYPE;
+        
+    BEGIN
+        -- Pide el motivo al usuario
+        v_motivo := '&Ingrese el motivo de la cancelacion: ';
+    
+        -- Inserta el registro en la bitacora
+        INSERT INTO bitacora_cancelacion
+            VALUES(p_id_consulta, SYSDATE, USER, v_motivo);
+        
+    EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+            -- Captura la info del error
+            v_cod_error := SQLCODE();
+            v_msg_error := SQLERRM();
+            
+            -- Delega la insercion al informe error
+            prc_informe_errores(v_cod_error, v_msg_error);
+    END;
+    
+END;
+
+
+
+/*======================
+-- Funcion Almacenada --
+======================*/
+CREATE OR REPLACE FUNCTION fn_rendimiento(
+        p_experiencia NUMBER, p_ponderacion_ex NUMBER,
+        p_productividad NUMBER, p_ponderacion_pr NUMBER,
+        p_especialidad NUMBER, p_ponderacion_es NUMBER,
+        p_region NUMBER, p_ponderacion_re NUMBER
+)
+RETURN NUMBER
+IS
+    -- Almacena el puntaje de rendimeinto
+    v_ptje_rendimiento NUMBER;
+    
+BEGIN
+    -- Calcula el rendimiento utilizando los valores dados
+    v_ptje_rendimiento := (p_experiencia * p_ponderacion_ex) 
+                        + (p_productividad * p_ponderacion_pr)
+                        + (p_especialidad * p_ponderacion_es) 
+                        + (p_region * p_ponderacion_re);
+    
+    -- Retorna el valor calculado
+    RETURN v_ptje_rendimiento;
 END;
 
 
@@ -357,8 +430,34 @@ ON consulta
 FOR EACH ROW
 DECLARE
 BEGIN
-    IF :NEW.estado = 'Cancelada' THEN
-        
+    -- Verifica si el estado de la consulta se marco como 'cancelada'
+    IF LOWER(:NEW.estado) = 'cancelada' THEN
+       pkg_insertar.prc_consulta_cancelada(:OLD.id);
+    END IF;
+END;
+
+
+
+/*============================
+-- Procedimiento Almacenado --
+============================*/
+CREATE OR REPLACE PROCEDURE prc_meta_consultas(
+    p_meta NUMBER, p_rut_medico NUMBER, p_ptje_region OUT NUMBER
+)
+IS
+    -- Almacena la cantidad de consultas de la clinica
+    v_consultas_clinica NUMBER;
+    
+BEGIN
+    -- Obtiene la cantidad total de consultas de la clinica
+    SELECT *
+    FROM consulta c;
+    
+    -- Determina si la cantidad de consultas es inferior al 80% de la meta 
+    IF (p_consultas / p_meta) < (p_meta * 0.8) THEN
+        -- Reduce el puntaje
+        p_ptje_region := p_ptje_region - (p_ptje_region * 0.05);
+    END IF;
 END;
 
 
@@ -368,6 +467,7 @@ END;
 ===========================*/
 CREATE OR REPLACE PROCEDURE prc_generar_informe(
     p_year NUMBER,
+    p_meta NUMBER,
     p_pond_exp NUMBER,
     p_pond_pro NUMBER,
     p_pond_esp NUMBER,
@@ -381,7 +481,8 @@ IS
                m.nombre,
                m.especialidad_id,
                TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12) anios_exp,
-               COUNT(c.id) cant_atenciones
+               COUNT(c.id) cant_atenciones,
+               c.clinica_id
         FROM medico m JOIN consulta c ON(m.rut = c.medico_rut)
         WHERE EXTRACT(YEAR FROM c.fecha) = p_year
                      AND UPPER(c.estado) = 'REALIZADA'
@@ -419,8 +520,6 @@ BEGIN
             reg_informe.nomb_especialidad,
             reg_informe.ptje_especialidad
         );
-        
-        -- Verifica regla de negocio (se lanza la excepcion definida por usuario)
     
         -- Delega una funcion para calcular el puntaje de productividad
         reg_informe.ptje_productividad := pkg_calc_puntaje.fn_productividad(reg_medico.cant_atenciones);
@@ -438,6 +537,9 @@ BEGIN
                        
         -- Delega una funcion para clasificar al medico
         reg_informe.clasificacion := fn_clasificar_medico(reg_informe.rendimiento);
+        
+        -- Delega un procedimiento para determinar si se cumple la meta
+        prc_meta_consultas(p_meta, reg_medico.cant_atenciones, reg_informe.ptje_region);
 
         -- Delega un procedimiento para guardar el informe controlando duplicados
         pkg_insertar.prc_informe_rendimiento(
@@ -451,7 +553,8 @@ BEGIN
             reg_informe.ptje_especialidad,
             reg_informe.ptje_region,
             reg_informe.rendimiento,
-            reg_informe.clasificacion
+            reg_informe.clasificacion,
+            p_year
         );
     END LOOP;
 END;
@@ -470,6 +573,9 @@ DECLARE
     
     -- Almacena el a�o a filtrar
     v_filtro NUMBER;
+    
+    -- Almacena la meta de consultas por clinica
+    v_meta NUMBER;
         
 BEGIN
     /* INICIALIZACION DE VARIBLES */
