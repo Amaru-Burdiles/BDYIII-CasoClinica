@@ -32,7 +32,7 @@ CREATE TABLE errores_informe
 /*=======================
 -- Informe Rendimiento --
 =======================*/
-CREATE TABLE informe_general
+CREATE TABLE informe_rendimiento
 (
     rut VARCHAR2(9) NOT NULL,
     nombre VARCHAR2(100) NOT NULL,
@@ -90,6 +90,15 @@ IS
     FUNCTION fn_region(p_run_medico NUMBER)
     RETURN NUMBER;
     
+    /* Calcula el rendimiento en base a especialidad, productividad, exp, region
+       y sus respectivas ponderaciones. Si estas ultimas son 0 se usa un defecto
+       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: NUMBER */
+    FUNCTION fn_rendimiento(p_especialidad NUMBER, p_ponderacion_es NUMBER,
+                            p_productividad NUMBER, p_ponderacion_pr NUMBER,
+                            p_experiencia NUMBER, p_ponderacion_ex NUMBER,
+                            p_region NUMBER, p_ponderacion_re NUMBER)
+    RETURN NUMBER;
+    
 END;
 
 /* IMPLEMENTACION */
@@ -114,7 +123,7 @@ IS
         v_ptje_experiencia NUMBER;
         
     BEGIN
-        --Obtiene el puntaje de experiencia 
+        -- Obtiene el puntaje de experiencia 
         SELECT puntaje
         INTO v_ptje_experiencia
         FROM puntajeexperiencia
@@ -132,13 +141,55 @@ IS
         v_ptje_productividad NUMBER;
         
     BEGIN
-        --Obtiene el puntaje de productividad del medico mediante el total de atenciones
+        -- Obtiene el puntaje de productividad del medico mediante el total de atenciones
         SELECT puntaje
         INTO v_ptje_productividad
         FROM puntajeproductividad
         WHERE p_atenciones BETWEEN atenciones_inicio AND atenciones_fin;
+        
+        -- Retorna el puntaje calculado
+        RETURN v_ptje_productividad;
     END;
     
+    -- FUNCION PUBLICA
+    FUNCTION fn_region(p_run_medico NUMBER)
+    RETURN NUMBER
+    IS
+        -- Almacena el puntaje asociado a la region
+        v_ptje_region NUMBER;
+        
+    BEGIN
+        -- Obtiene el puntaje de region 
+        SELECT MAX(r.puntaje)
+        INTO v_ptje_region
+        FROM region r JOIN clinica c ON (r.id = c.region_id)
+                      JOIN consulta co ON (c.id = co.clinica_id)
+        WHERE co.medico_rut = p_run_medico;
+        
+        -- Retorna el puntaje calculado
+        RETURN v_ptje_region;
+    END;
+    
+    -- FUNCION PUBLICA
+    FUNCTION fn_rendimiento(p_experiencia NUMBER, p_ponderacion_ex NUMBER,
+                            p_productividad NUMBER, p_ponderacion_pr NUMBER,
+                            p_especialidad NUMBER, p_ponderacion_es NUMBER,
+                            p_region NUMBER, p_ponderacion_re NUMBER)
+    RETURN NUMBER
+    IS
+        -- Almacena el puntaje de rendimeinto
+        v_ptje_rendimiento NUMBER;
+        
+    BEGIN
+        -- Calcula el rendimiento utilizando los valores dados
+        v_ptje_rendimiento := (p_experiencia * p_ponderacion_ex) 
+                            + (p_productividad * p_ponderacion_pr)
+                            + (p_especialidad * p_ponderacion_es) 
+                            + (p_region * p_ponderacion_re);
+        
+        -- Retorna el valor calculado
+        RETURN v_ptje_rendimiento;
+    END;
 END;
 
 /*=============================
@@ -148,23 +199,105 @@ CREATE OR REPLACE PACKAGE pkg_insertar
 IS
     /* Inserta registros al Informe Rendimiento
        Input: ; Output: Void */
+    PROCEDURE prc_informe_rendimiento(
+        p_rut VARCHAR,
+        p_nombre VARCHAR,
+        p_especialidad VARCHAR,
+        p_anios_exp NUMBER,
+        p_cant_atenciones NUMBER,
+        p_ptje_experiencia NUMBER,
+        p_ptje_productividad NUMBER,
+        p_ptje_especialidad NUMBER,
+        p_ptje_region NUMBER,
+        p_rendimiento NUMBER,
+        p_clasificacion VARCHAR
+    );
 
 END;
 
-
-CREATE OR REPLACE PACKAGE pkg_calculos
+/* IMPLEMENTACION */
+CREATE OR REPLACE PACKAGE BODY pkg_insertar
 IS
-    /* Limpia y guarda los ponderadores dados para esta sesion 
-       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: Void */
+    -- PROCEDIMIENTO PRIVADO
+    PROCEDURE prc_informe_errores(v_codigo NUMBER, v_mensaje VARCHAR)
+    IS
+    BEGIN
+        -- Inserta el error en la tabla informe errores
+        INSERT INTO errores_informe
+            VALUES (seq_error_informe.NEXTVAL, SYSDATE, v_codigo, v_mensaje);
+        
+    END;
+    
+    -- PROCEDIMIENTO PUBLICO
+    PROCEDURE prc_informe_rendimiento(
+        p_rut VARCHAR,
+        p_nombre VARCHAR,
+        p_especialidad VARCHAR,
+        p_anios_exp NUMBER,
+        p_cant_atenciones NUMBER,
+        p_ptje_experiencia NUMBER,
+        p_ptje_productividad NUMBER,
+        p_ptje_especialidad NUMBER,
+        p_ptje_region NUMBER,
+        p_rendimiento NUMBER,
+        p_clasificacion VARCHAR
+    )
+    IS
+    BEGIN
+        -- Inserta un ragistro en la tabla informe rendimiento
+        INSERT INTO informe_rendimieto VALUES (
+                p_rut,
+                p_nombre,
+                p_especialidad,
+                p_anios_exp,
+                p_cant_atenciones,
+                p_ptje_experiencia,
+                p_ptje_productividad,
+                p_ptje_especialidad,
+                p_ptje_region,
+                p_rendimiento,
+                p_clasificacion
+            );
+        EXCEPTION -- Try-Catch: En caso que los datos esten duplicados
+            WHEN DUP_VAL_ON_INDEX THEN
+                -- Captura los datos del error
+                v_cod_error := SQLCODE;
+                v_msg_error := SQLERRM;
+                
+                -- Guarda el error
+                pprc_informe_errores(v_cod_error, v_msg_error);
+    END;
+    
+END;
 
-    /* Calcula el indicador integral a partir de los puntajes dados 
-       Input: NUMBER, NUMBER, NUMBER, NUMBER; Output: NUMBER */
+/*======================
+-- Funcion Almacenada --
+======================*/
+CREATE OR REPLACE FUNCTION fn_clasificar_medico(p_rendimiento NUMBER)
+RETURN VARCHAR
+IS
+    -- Almacena la clasificiacion
+    v_clasificacion clasificacion_medico.descripcion_clase%TYPE;
+    
+BEGIN
+    -- Obtiene la clasificacion segun el rendimiento
+    SELECT descripcion_clase
+    INTO v_clasificacion
+    FROM clasificacion_medico
+    WHERE p_rendimiento BETWEEN limite_inferior AND limite_superior;
+    
+    -- Retorna el valor obtenido
+    RETURN v_clasificacion;
 END;
 
 
-
-
-
+/*=========================
+-- Trigger Regla Negocio --
+=========================*/
+CREATE OR REPLACE TRIGGER trg_sin_consultas
+AFTER INSERT
+ON informe_rendimiento
+FOR EACH ROW
 
 
 /* DESARROLLO BLOQUE AN�NIMO =============================================== */
@@ -246,44 +379,13 @@ BEGIN
     
         -- funcion productividad
 
-        --Obtiene el puntaje de region 
-        SELECT MAX(r.puntaje) INTO reg_general.ptje_region
-        FROM region r JOIN clinica c ON (r.id = c.region_id)
-        JOIN consulta co ON (c.id = co.clinica_id)
-        WHERE co.medico_rut = reg_medico.rut;
+        -- funcion region
         
-        -- C�lculo del indicador integral utilizando los valores almacenados en el VARRAY
-        reg_general.rendimiento := (reg_general.ptje_experiencia * v_ponderadores(1)) + 
-                                 (reg_general.ptje_productividad * v_ponderadores(2)) + 
-                                  (reg_general.ptje_especialidad * v_ponderadores(3)) + 
-                                  (reg_general.ptje_region * v_ponderadores(4));
+        -- funcion rendimiento
                        
-        -- Obtiene la clasificaci�n seg�n el indicador obtenido
-        SELECT descripcion_clase INTO reg_general.clasificacion
-        FROM clasificacion_medico
-        WHERE reg_general.rendimiento BETWEEN limite_inferior AND limite_superior;
+        -- funcion clasificacion
 
-        -- Inserta registro en la tabla de resultado general controlando duplicados (DUP_VAL_ON_INDEX)[cite: 4, 5]
-        BEGIN
-            INSERT INTO informe_general VALUES (
-                reg_medico.rut,
-                reg_medico.nombre,
-                reg_medico.especialidad_id,
-                reg_medico.anios_exp,
-                reg_medico.cant_atenciones,
-                reg_general.ptje_experiencia,
-                reg_general.ptje_productividad,
-                reg_general.ptje_especialidad,
-                reg_general.ptje_region,
-                reg_general.rendimiento,
-                reg_general.clasificacion
-            );
-        EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
-            v_cod_error := SQLCODE;
-            v_msg_error := SQLERRM;
-            INSERT INTO errores_informe (id_error, fecha_error, codigo_error, descripcion_error)
-            VALUES (SEQ_ERROR_INFORME.NEXTVAL, SYSDATE, v_cod_error, v_msg_error);
-        END;
+        -- Inserta registro en la tabla de resultado general controlando duplicados
     END LOOP;
     COMMIT;
 END;
