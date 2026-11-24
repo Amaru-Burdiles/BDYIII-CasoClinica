@@ -8,7 +8,6 @@ DROP SEQUENCE seq_informe_errores;
 
 /* ------------------------- CREACION DE OBJEOS ----------------------------- */
 
-
 /*========================
 -- Clasificacion Medico --
 ========================*/
@@ -63,8 +62,6 @@ CREATE TABLE informe_rendimiento
 ALTER TABLE informe_rendimiento
 ADD CONSTRAINT PK_informe_rendimiento PRIMARY KEY (
     rut,
-    nombre,
-    especialidad,
     anios_exp,
     cant_atenciones,
     ptje_experiencia,
@@ -73,8 +70,7 @@ ADD CONSTRAINT PK_informe_rendimiento PRIMARY KEY (
     ptje_region,
     rendimiento,
     clasificacion,
-    periodo_filtrado,
-    fecha_informe
+    periodo_filtrado
 );
 
 
@@ -86,8 +82,12 @@ CREATE TABLE bitacora_cancelacion
 (
     id_consulta NUMBER NOT NULL,
     fecha_cambio DATE NOT NULL,
-    encargado VARCHAR2(100) NOT NULL,
-    motivo VARCHAR2(600) NOT NULL
+    encargado VARCHAR2(100) NOT NULL /*,
+    
+    El trigger que inserta en esta tabla no puede obtener un 'motivo' de ningun
+    lugar, asi que solo almacenaremos la consulta modificada, quien lo hizo y
+    la fecha en que sucedio*/
+    --motivo VARCHAR2(600) NOT NULL
 );
 
 ALTER TABLE bitacora_cancelacion
@@ -98,7 +98,7 @@ ADD CONSTRAINT PK_bitacora PRIMARY KEY (id_consulta, fecha_cambio);
 /*=====================
 -- Secuencia Errores --
 =====================*/
-CREATE SEQUENCE SEQ_ERROR_INFORME;
+CREATE SEQUENCE seq_informe_errores;
 
 
 /* ------------------------- INSERSION DE DATOS ----------------------------- */
@@ -240,7 +240,6 @@ IS
     /* Inserta registros a la bitacora de consultas canceladas 
        Input: NUMBER; Output: Void */
     PROCEDURE prc_consulta_cancelada(p_id_consulta NUMBER);
-    
 
 
     /* Inserta registros al Informe errores
@@ -258,7 +257,7 @@ IS
     BEGIN
         -- Inserta el error en la tabla informe errores
         INSERT INTO informe_errores
-            VALUES (seq_error_informe.NEXTVAL, SYSDATE, v_codigo, v_mensaje);
+            VALUES (seq_informe_errores.NEXTVAL, SYSDATE, v_codigo, v_mensaje);
         
     END;
     
@@ -313,21 +312,15 @@ IS
     
     -- CONSULTA CANCELADA
     PROCEDURE prc_consulta_cancelada(p_id_consulta NUMBER)
-    IS
-        -- Almacena el motivo de la cancelacion
-        v_motivo bitacora_cancelacion.motivo%TYPE;
-        
+    IS  
         -- Almacena el codigo y mensaje del error
         v_cod_error NUMBER;
         v_msg_error informe_errores.descripcion_error%TYPE;
         
     BEGIN
-        -- Pide el motivo al usuario
-        v_motivo := '&Ingrese el motivo de la cancelacion: ';
-    
         -- Inserta el registro en la bitacora
         INSERT INTO bitacora_cancelacion
-            VALUES(p_id_consulta, SYSDATE, USER, v_motivo);
+            VALUES(p_id_consulta, SYSDATE, USER);
         
     EXCEPTION
         WHEN DUP_VAL_ON_INDEX THEN
@@ -396,7 +389,7 @@ END;
 -- Trigger Regla Negocio --
 =========================*/
 CREATE OR REPLACE TRIGGER trg_sin_consultas
-AFTER INSERT
+BEFORE INSERT
 ON informe_rendimiento
 FOR EACH ROW
 DECLARE
@@ -432,7 +425,7 @@ DECLARE
 BEGIN
     -- Verifica si el estado de la consulta se marco como 'cancelada'
     IF LOWER(:NEW.estado) = 'cancelada' THEN
-       pkg_insertar.prc_consulta_cancelada(:OLD.id);
+        pkg_insertar.prc_consulta_cancelada(:OLD.id);
     END IF;
 END;
 
@@ -442,21 +435,49 @@ END;
 -- Procedimiento Almacenado --
 ============================*/
 CREATE OR REPLACE PROCEDURE prc_meta_consultas(
-    p_meta NUMBER, p_rut_medico NUMBER, p_ptje_region OUT NUMBER
+    p_consultas NUMBER,
+    p_rut_medico NUMBER,
+    p_old_ptje_region NUMBER,
+    p_new_ptje_region OUT NUMBER
 )
-IS
-    -- Almacena la cantidad de consultas de la clinica
-    v_consultas_clinica NUMBER;
-    
+IS  
+    -- Almacena el id de la clinica en el que el medico tiene mas consultas
+    v_clinica NUMBER;
+
+    -- Almacena la meta de pacientes de la clinica dada
+    v_meta NUMBER;
+
 BEGIN
-    -- Obtiene la cantidad total de consultas de la clinica
-    SELECT *
-    FROM consulta c;
-    
+    /* Super Consulta: */
+    -- Obtiene el id de la clinica con el mayor numero de consultas
+    SELECT clinica
+    INTO v_clinica
+    FROM
+    (   /* Sub Consulta: */
+        -- Obtiene las consultas del medico y las agrupa por clinica
+        SELECT COUNT(c.id) cant_consultas,
+               c.clinica_id clinica
+        FROM consulta c
+        WHERE c.medico_rut = p_rut_medico
+        GROUP BY c.clinica_id
+        ORDER BY 1 DESC
+    )
+    WHERE ROWNUM = 1;
+
+    -- Obtiene la meta de pacientes de la clinica dada
+    SELECT cli.meta_pacientes
+    INTO v_meta
+    FROM clinica cli
+    WHERE cli.id = v_clinica;
+
     -- Determina si la cantidad de consultas es inferior al 80% de la meta 
-    IF (p_consultas / p_meta) < (p_meta * 0.8) THEN
+    IF (p_consultas / v_meta) < (v_meta * 0.8) THEN
         -- Reduce el puntaje
-        p_ptje_region := p_ptje_region - (p_ptje_region * 0.05);
+        p_new_ptje_region := p_old_ptje_region - (p_old_ptje_region * 0.05);
+    
+    ELSE
+        -- Mantiene el puntaje actual
+        p_new_ptje_region := p_old_ptje_region;
     END IF;
 END;
 
@@ -467,22 +488,20 @@ END;
 ===========================*/
 CREATE OR REPLACE PROCEDURE prc_generar_informe(
     p_year NUMBER,
-    p_meta NUMBER,
     p_pond_exp NUMBER,
     p_pond_pro NUMBER,
     p_pond_esp NUMBER,
     p_pond_reg NUMBER
 )
 IS
-    -- Almacena la informacion del medico, filtrando por el aï¿½o de la consulta
+    -- Almacena la informacion del medico, filtrando por el año de la consulta
     CURSOR c_medicos(p_year NUMBER) IS 
         SELECT m.rut,
                m.dv,
                m.nombre,
                m.especialidad_id,
                TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12) anios_exp,
-               COUNT(c.id) cant_atenciones,
-               c.clinica_id
+               COUNT(c.id) cant_atenciones
         FROM medico m JOIN consulta c ON(m.rut = c.medico_rut)
         WHERE EXTRACT(YEAR FROM c.fecha) = p_year
                      AND UPPER(c.estado) = 'REALIZADA'
@@ -492,7 +511,7 @@ IS
                  m.especialidad_id,
                  TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_ingreso)/ 12);
     
-    -- Define una estructura para agrupar los resultados de cursores implicitos
+    -- Define una estructura para agrupar los resultados obtenidos
     TYPE camposInforme IS RECORD (
         nomb_especialidad   especialidad.nombre%TYPE,
         ptje_experiencia    informe_rendimiento.ptje_experiencia%TYPE,
@@ -503,44 +522,50 @@ IS
         clasificacion       informe_rendimiento.clasificacion%TYPE
     );
     
-    -- Almacena todos los datos necesarios para el informe
+    -- Recopila todos los datos necesarios para el informe en un solo lugar
     reg_informe camposInforme;
      
 BEGIN
-    /* BUCLE PRINCIPAL */
-    --Recorre el registro de los medicos pasando a cada uno el aï¿½o a filtrar
     FOR reg_medico IN c_medicos(p_year) LOOP
         
-        -- Delega una funcion para calcular el puntaje experiencia
+        /*PUNTAJE EXPERIENCIA*/
+        -- Delega una funcion para calcularlo entregando los años de servicio
         reg_informe.ptje_experiencia := pkg_calc_puntaje.fn_experiencia(reg_medico.anios_exp);
         
-        -- Delega un procedimiento para obtener la especialidad y su puntaje
+        /*PUNTAJE ESPECIALIDAD*/
+        -- Delega un procedimiento para obtener ambos especialidad y puntaje
         pkg_calc_puntaje.prc_especialidad(
             reg_medico.especialidad_id,
             reg_informe.nomb_especialidad,
             reg_informe.ptje_especialidad
         );
     
-        -- Delega una funcion para calcular el puntaje de productividad
+        /*PUNTAJE PRODUCTIVIDAD*/
+        -- Delega una funcion para calcularlo a partir de la cantidad de atenciones
         reg_informe.ptje_productividad := pkg_calc_puntaje.fn_productividad(reg_medico.cant_atenciones);
 
-        -- Delega una funcion para calcular el puntaje region
+        /*PUNTAJE REGION*/
+        -- Delega una funcion para calcularlo a partir del rut del medico
         reg_informe.ptje_region := pkg_calc_puntaje.fn_region(reg_medico.rut);
         
-        -- Delegamos una funcion para calcular el rendimiento
-        reg_informe.rendimiento := pkg_calc_puntaje.fn_rendimiento(
+        /*VERIFICAR META*/
+        -- Delega un procedimiento para determinar si se cumple la meta de pacientes
+        prc_meta_consultas(reg_medico.cant_atenciones, reg_medico.rut, reg_informe.ptje_region, reg_informe.ptje_region);
+        
+        /*CALCULO RENDIMIENTO*/
+        -- Delega una funcion para calcular el indice integral de desempeño
+        reg_informe.rendimiento := fn_rendimiento(
             reg_informe.ptje_experiencia, p_pond_exp,
             reg_informe.ptje_productividad, p_pond_pro,
             reg_informe.ptje_especialidad, p_pond_esp,
             reg_informe.ptje_region, p_pond_reg
         );
-                       
-        -- Delega una funcion para clasificar al medico
-        reg_informe.clasificacion := fn_clasificar_medico(reg_informe.rendimiento);
         
-        -- Delega un procedimiento para determinar si se cumple la meta
-        prc_meta_consultas(p_meta, reg_medico.cant_atenciones, reg_informe.ptje_region);
+        /*CLASIFICACION DEL MEDICO*/
+        -- Delega una funcion para clasificar al medico de acuerdo a su rendimiento
+        reg_informe.clasificacion := fn_clasificar_medico(reg_informe.rendimiento);
 
+        /*GUARDAR INFORME*/
         -- Delega un procedimiento para guardar el informe controlando duplicados
         pkg_insertar.prc_informe_rendimiento(
             reg_medico.rut,
@@ -573,9 +598,6 @@ DECLARE
     
     -- Almacena el aï¿½o a filtrar
     v_filtro NUMBER;
-    
-    -- Almacena la meta de consultas por clinica
-    v_meta NUMBER;
         
 BEGIN
     /* INICIALIZACION DE VARIBLES */
@@ -598,31 +620,10 @@ BEGIN
     COMMIT;
 END;
 
-
 /*===========
 -- Testing --
 ===========*/
-SELECT *
-FROM medico m LEFT JOIN especialidad e ON (m.especialidad_id = e.id);
-
-SET SERVEROUTPUT ON;
-
-DECLARE
-    CURSOR c_medicos IS
-        SELECT
-        m.rut,
-        m.especialidad_id
-        FROM medico m;
-    
-    v_resultado especialidad.nombre%TYPE;
-    v_puntaje NUMBER;
-    
-BEGIN
-
-    FOR reg_m IN c_medicos LOOP
-        pkg_calc_puntaje.prc_especialidad(reg_m.especialidad_id, v_resultado, v_puntaje);
-        
-        DBMS_OUTPUT.PUT_LINE(reg_m.rut || ' ' || v_resultado || ' ' || v_puntaje);
-    
-    END LOOP;    
-END;
+-- Cancela una consulta para testear el trigger que modifica la Bitacora
+UPDATE consulta
+SET estado = 'Cancelada'
+WHERE ID = 20001;
